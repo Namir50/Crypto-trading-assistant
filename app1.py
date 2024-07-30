@@ -75,7 +75,7 @@ def build_and_train_model(features, labels):
     
     return model, scaler
 
-def predict_future_prices(model, scaler, df, conversion_rate):
+def predict_future_prices(model, scaler, df, conversion_rate, symbol, features):
     today = df['close_time'].max()
     next_hour_start = today + timedelta(hours=1)  # Start from the next hour
 
@@ -83,7 +83,7 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     future_df = pd.DataFrame(index=future_dates)
     
     # Use the last available features for the prediction
-    features_count = len(df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].columns)
+    features_count = len(features.columns)
     
     last_features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].iloc[-1].values
     last_features = np.reshape(last_features, (1, features_count))  # Reshape for prediction
@@ -92,14 +92,14 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     
     for _ in range(168):  # Predict for the next 168 hours
         # Predict the price for the next hour
-        scaled_last_features = scaler.transform(last_features)
+        scaled_last_features = scaler.transform(pd.DataFrame(last_features, columns=features.columns))
         prediction = model.predict(scaled_last_features)
         future_predictions.append(prediction[0])
         
         # Update last_features for next prediction
         new_feature = np.zeros((1, features_count))
         last_features = np.roll(last_features, shift=-1, axis=1)  # Roll features left
-        last_features[0, -1] = prediction  # Update last feature with the new prediction
+        last_features[0, -1] = prediction[0]  # Update last feature with the new prediction
 
     future_df['predicted_close'] = future_predictions
     future_df['predicted_close_inr'] = future_df['predicted_close'] * conversion_rate
@@ -115,8 +115,8 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     best_price_to_buy_inr = best_price_to_buy * conversion_rate
     best_price_to_sell_inr = best_price_to_sell * conversion_rate
 
-    print(f"\nBest time to buy: {best_time_to_buy} at price ${best_price_to_buy:.8f} ({best_price_to_buy_inr:.2f} INR)")
-    print(f"Best time to sell: {best_time_to_sell} at price ${best_price_to_sell:.8f} ({best_price_to_sell_inr:.2f} INR)")
+    print(f"\nBest time to buy {symbol}: {best_time_to_buy} at price ${best_price_to_buy:.8f} ({best_price_to_buy_inr:.2f} INR)")
+    print(f"Best time to sell {symbol}: {best_time_to_sell} at price ${best_price_to_sell:.8f} ({best_price_to_sell_inr:.2f} INR)")
 
     return future_df
 
@@ -136,7 +136,7 @@ def main():
     model, scaler = build_and_train_model(features, labels)
 
     conversion_rate = get_conversion_rate()
-    future_df = predict_future_prices(model, scaler, df, conversion_rate)
+    future_df = predict_future_prices(model, scaler, df, conversion_rate, symbol, features)
 
     # Print the predicted prices in a tabular format
     print("\nPredicted Prices for {} in the next 168 hours:".format(symbol))
