@@ -97,6 +97,7 @@ def train_model(df):
     
     return model, scaler
 
+
 def predict_future_prices(model, scaler, df, conversion_rate):
     today = df['close_time'].max()
     next_week_start = today + timedelta(hours=1)  # Start from the next hour
@@ -111,13 +112,12 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     future_features = []
     for i in range(168):  # Predict for the next 168 hours
         future_features.append(last_features)
-        # Shift features for the next prediction
-        last_features = np.roll(last_features, shift=-1, axis=1)  # Roll features left
         
-        # Create a new feature with zeros
-        new_feature = np.zeros((1, last_features.shape[1] - 1))
-        last_features = np.hstack((last_features[:, 1:], new_feature))
-
+        # Update last_features for next prediction
+        last_features = np.roll(last_features, shift=-1, axis=1)  # Roll features left
+        new_feature = np.zeros((1, last_features.shape[]))  # Add new feature for the next step
+        last_features = np.hstack((last_features[:, 1:], new_feature))  # Update features
+    
     future_features = np.array(future_features)
     
     # Scale the future features
@@ -130,7 +130,6 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     future_df['predicted_close_inr'] = future_df['predicted_close'] * conversion_rate
     
     return future_df
-
 
 def get_conversion_rate():
     url = "https://api.exchangerate-api.com/v4/latest/USD"
