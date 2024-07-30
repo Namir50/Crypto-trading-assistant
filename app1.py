@@ -76,10 +76,13 @@ def build_and_train_model(features, labels):
     return model, scaler
 
 def predict_future_prices(model, scaler, df, conversion_rate, symbol, features):
+    # Assuming 'df' contains timestamps up to the latest data point
     today = df['close_time'].max()
-    next_hour_start = today + timedelta(hours=1)  # Start from the next hour
-
-    future_dates = pd.date_range(start=next_hour_start, periods=168, freq='h')
+    
+    # Set next_hour_start to midnight of the next day
+    next_midnight = (today + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    future_dates = pd.date_range(start=next_midnight, periods=168, freq='H')
     future_df = pd.DataFrame(index=future_dates)
     
     # Use the last available features for the prediction
@@ -97,7 +100,6 @@ def predict_future_prices(model, scaler, df, conversion_rate, symbol, features):
         future_predictions.append(prediction[0])
         
         # Update last_features for next prediction
-        new_feature = np.zeros((1, features_count))
         last_features = np.roll(last_features, shift=-1, axis=1)  # Roll features left
         last_features[0, -1] = prediction[0]  # Update last feature with the new prediction
 
@@ -115,10 +117,17 @@ def predict_future_prices(model, scaler, df, conversion_rate, symbol, features):
     best_price_to_buy_inr = best_price_to_buy * conversion_rate
     best_price_to_sell_inr = best_price_to_sell * conversion_rate
 
+    # Format the datetime to 'YEAR-MONTH-DATE  HOUR:MINUTE PM/AM'
+    best_time_to_buy = best_time_to_buy.strftime('%Y-%m-%d %I:%M %p')
+    best_time_to_sell = best_time_to_sell.strftime('%Y-%m-%d %I:%M %p')
+
+    future_df['formatted_date'] = future_df.index.strftime('%Y-%m-%d %I:%M %p')
+
     print(f"\nBest time to buy {symbol}: {best_time_to_buy} at price ${best_price_to_buy:.8f} ({best_price_to_buy_inr:.2f} INR)")
     print(f"Best time to sell {symbol}: {best_time_to_sell} at price ${best_price_to_sell:.8f} ({best_price_to_sell_inr:.2f} INR)")
 
     return future_df
+
 
 def get_conversion_rate():
     url = "https://api.exchangerate-api.com/v4/latest/USD"
@@ -144,7 +153,7 @@ def main():
     pd.set_option('display.max_rows', None)
     pd.set_option('display.width', 1000)
     
-    print(future_df[['predicted_close', 'predicted_close_inr']].to_string(index=True, header=True, float_format=lambda x: '{:.8f}'.format(x)))
+    print(future_df[['formatted_date', 'predicted_close', 'predicted_close_inr']].to_string(index=False, header=True, float_format=lambda x: '{:.8f}'.format(x)))
 
     pd.reset_option('display.max_rows')
     pd.reset_option('display.width')
