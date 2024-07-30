@@ -1,9 +1,7 @@
 import numpy as np
 import pandas as pd
 import requests
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -51,42 +49,22 @@ def create_features(df):
     
     df.dropna(inplace=True)  # Remove rows with NaN values
 
-def create_lstm_data(df, original_close):
-    X, y = [], []
-    time_steps = 10
-    for i in range(len(df) - time_steps - 7):  # Predict 7 days ahead
-        X.append(df[i:(i + time_steps)].values)
-        y.append(original_close[i + time_steps + 7])
-    return np.array(X), np.array(y)
-
-def build_lstm_model(input_shape):
-    model = Sequential()
-    model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
-    model.add(Dropout(0.2))
-    model.add(LSTM(50))
-    model.add(Dropout(0.2))
-    model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    return model
-
-def train_model(df):
+def create_feature_label_data(df):
     df['future_close'] = df['close'].shift(-7)  # Predict price 7 days ahead
     df.dropna(inplace=True)  # Remove rows with NaN values
-    
-    original_close = df['close'].values  # Save the original close values
-    
+
     features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]]
     labels = df['future_close']
-    
+    return features, labels
+
+def build_and_train_model(features, labels):
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
     
-    X, y = create_lstm_data(pd.DataFrame(scaled_features), original_close)
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    model = build_lstm_model((X_train.shape[1], X_train.shape[2]))
-    model.fit(X_train, y_train, epochs=10, batch_size=32, validation_split=0.2, verbose=1)
+    X_train, X_test, y_train, y_test = train_test_split(scaled_features, labels, test_size=0.2, random_state=42)
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
     
     y_pred = model.predict(X_test)
     mse = mean_squared_error(y_test, y_pred)
@@ -97,38 +75,49 @@ def train_model(df):
     
     return model, scaler
 
-
 def predict_future_prices(model, scaler, df, conversion_rate):
     today = df['close_time'].max()
-    next_week_start = today + timedelta(hours=1)  # Start from the next hour
-    
-    future_dates = pd.date_range(start=next_week_start, periods=168, freq='h')
+    next_hour_start = today + timedelta(hours=1)  # Start from the next hour
+
+    future_dates = pd.date_range(start=next_hour_start, periods=168, freq='h')
     future_df = pd.DataFrame(index=future_dates)
     
     # Use the last available features for the prediction
-    last_features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].iloc[-1].values
-    last_features = np.reshape(last_features, (1, -1))  # Ensure the shape matches the model's expected input shape
+    features_count = len(df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].columns)
     
-    future_features = []
-    for i in range(168):  # Predict for the next 168 hours
-        future_features.append(last_features)
+    last_features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].iloc[-1].values
+    last_features = np.reshape(last_features, (1, features_count))  # Reshape for prediction
+    
+    future_predictions = []
+    
+    for _ in range(168):  # Predict for the next 168 hours
+        # Predict the price for the next hour
+        scaled_last_features = scaler.transform(last_features)
+        prediction = model.predict(scaled_last_features)
+        future_predictions.append(prediction[0])
         
         # Update last_features for next prediction
+        new_feature = np.zeros((1, features_count))
         last_features = np.roll(last_features, shift=-1, axis=1)  # Roll features left
-        new_feature = np.zeros((1, last_features.shape[]))  # Add new feature for the next step
-        last_features = np.hstack((last_features[:, 1:], new_feature))  # Update features
-    
-    future_features = np.array(future_features)
-    
-    # Scale the future features
-    scaled_future_features = scaler.transform(future_features.reshape(-1, future_features.shape[-1]))
-    scaled_future_features = scaled_future_features.reshape(future_features.shape)
-    
-    # Predict future prices
-    future_predictions = model.predict(scaled_future_features)
-    future_df['predicted_close'] = future_predictions.flatten()
+        last_features[0, -1] = prediction  # Update last feature with the new prediction
+
+    future_df['predicted_close'] = future_predictions
     future_df['predicted_close_inr'] = future_df['predicted_close'] * conversion_rate
-    
+
+    # Find best times to buy and sell
+    min_index = future_df['predicted_close'].idxmin()
+    max_index = future_df['predicted_close'].idxmax()
+
+    best_time_to_buy = future_df.loc[min_index].name
+    best_time_to_sell = future_df.loc[max_index].name
+    best_price_to_buy = future_df.loc[min_index, 'predicted_close']
+    best_price_to_sell = future_df.loc[max_index, 'predicted_close']
+    best_price_to_buy_inr = best_price_to_buy * conversion_rate
+    best_price_to_sell_inr = best_price_to_sell * conversion_rate
+
+    print(f"\nBest time to buy: {best_time_to_buy} at price ${best_price_to_buy:.8f} ({best_price_to_buy_inr:.2f} INR)")
+    print(f"Best time to sell: {best_time_to_sell} at price ${best_price_to_sell:.8f} ({best_price_to_sell_inr:.2f} INR)")
+
     return future_df
 
 def get_conversion_rate():
@@ -143,10 +132,8 @@ def main():
     df = fetch_binance_data(symbol, '1h', 1000)
     create_features(df)
 
-    model, scaler = train_model(df)
-    if model is None:
-        print("Failed to train the model. Exiting.")
-        return
+    features, labels = create_feature_label_data(df)
+    model, scaler = build_and_train_model(features, labels)
 
     conversion_rate = get_conversion_rate()
     future_df = predict_future_prices(model, scaler, df, conversion_rate)
@@ -161,19 +148,6 @@ def main():
 
     pd.reset_option('display.max_rows')
     pd.reset_option('display.width')
-
-    # Format the time to Hour:Minute
-    formatted_times = future_df.index.strftime('%Y-%m-%d %H:%M')
-
-    # Find the best buy and sell times based on the lowest and highest predicted prices
-    best_buy_time = future_df.loc[future_df['predicted_close'].idxmin()].name.strftime('%Y-%m-%d %H:%M')
-    best_sell_time = future_df.loc[future_df['predicted_close'].idxmax()].name.strftime('%Y-%m-%d %H:%M')
-
-    print("\nBest Time to Buy for {}:".format(symbol))
-    print("Time: {}, Price (USD): {:.8f}, Price (INR): {:.8f}".format(best_buy_time, future_df['predicted_close'].min(), future_df['predicted_close_inr'].min()))
-
-    print("Best Time to Sell for {}: ".format(symbol))
-    print("Time: {}, Price (USD): {:.8f}, Price (INR): {:.8f}".format(best_sell_time, future_df['predicted_close'].max(), future_df['predicted_close_inr'].max()))
 
 if __name__ == "__main__":
     main()
