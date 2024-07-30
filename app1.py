@@ -107,15 +107,26 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     last_features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].iloc[-10:]
     scaled_last_features = scaler.transform(last_features)
     
-    future_features = np.array([scaled_last_features[-10:].values])
+    future_features = np.array([scaled_last_features])
     predicted_closes = []
     
     for i in range(len(future_dates)):
         prediction = model.predict(future_features)
         predicted_closes.append(prediction[0, 0])
-        new_feature = np.append(future_features[0, 1:], prediction[0, 0]).reshape((1, 10, -1))
-        future_features = new_feature
-    
+        
+        # Expand dimensions of the prediction to match the expected input shape of the model
+        expanded_prediction = np.expand_dims(prediction, axis=0)  # Add a singleton dimension for batch size
+        
+        # Ensure future_features[-1] has the same number of dimensions as expanded_prediction
+        future_features[-1] = np.expand_dims(future_features[-1], axis=0)  # Add a singleton dimension for batch size
+        
+        # Concatenate the existing features with the expanded prediction
+        new_feature = np.hstack([future_features[-1], expanded_prediction])
+        future_features = np.vstack([future_features, new_feature.reshape(1, -1)])
+        
+        # Prepare for the next iteration
+        future_features = future_features[:-1]  # Remove the last added feature since it's now outdated
+        
     future_df['predicted_close'] = predicted_closes
     future_df['predicted_close_inr'] = future_df['predicted_close'] * conversion_rate
     
