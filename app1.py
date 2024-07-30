@@ -104,33 +104,33 @@ def predict_future_prices(model, scaler, df, conversion_rate):
     future_dates = pd.date_range(start=next_week_start, periods=168, freq='h')
     future_df = pd.DataFrame(index=future_dates)
     
-    last_features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].iloc[-10:]
-    scaled_last_features = scaler.transform(last_features)
+    # Use the last available features for the prediction
+    last_features = df[['SMA_50', 'SMA_200', 'RSI', 'EMA_12', 'EMA_26', 'MACD', 'MACD_signal', 'Bollinger_High', 'Bollinger_Low', 'volume_change'] + [f'close_lag_{i}' for i in range(1, 11)]].iloc[-1].values
+    last_features = np.reshape(last_features, (1, -1))  # Ensure the shape matches the model's expected input shape
     
-    future_features = np.array([scaled_last_features])
-    predicted_closes = []
+    future_features = []
+    for i in range(168):  # Predict for the next 168 hours
+        future_features.append(last_features)
+        # Shift features for the next prediction
+        last_features = np.roll(last_features, shift=-1, axis=1)  # Roll features left
+        
+        # Create a new feature with zeros
+        new_feature = np.zeros((1, last_features.shape[1] - 1))
+        last_features = np.hstack((last_features[:, 1:], new_feature))
+
+    future_features = np.array(future_features)
     
-    for i in range(len(future_dates)):
-        prediction = model.predict(future_features)
-        predicted_closes.append(prediction[0, 0])
-        
-        # Expand dimensions of the prediction to match the expected input shape of the model
-        expanded_prediction = np.expand_dims(prediction, axis=0)  # Add a singleton dimension for batch size
-        
-        # Ensure future_features[-1] has the same number of dimensions as expanded_prediction
-        future_features[-1] = np.expand_dims(future_features[-1], axis=0)  # Add a singleton dimension for batch size
-        
-        # Concatenate the existing features with the expanded prediction
-        new_feature = np.hstack([future_features[-1], expanded_prediction])
-        future_features = np.vstack([future_features, new_feature.reshape(1, -1)])
-        
-        # Prepare for the next iteration
-        future_features = future_features[:-1]  # Remove the last added feature since it's now outdated
-        
-    future_df['predicted_close'] = predicted_closes
+    # Scale the future features
+    scaled_future_features = scaler.transform(future_features.reshape(-1, future_features.shape[-1]))
+    scaled_future_features = scaled_future_features.reshape(future_features.shape)
+    
+    # Predict future prices
+    future_predictions = model.predict(scaled_future_features)
+    future_df['predicted_close'] = future_predictions.flatten()
     future_df['predicted_close_inr'] = future_df['predicted_close'] * conversion_rate
     
     return future_df
+
 
 def get_conversion_rate():
     url = "https://api.exchangerate-api.com/v4/latest/USD"
